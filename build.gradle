@@ -1,60 +1,46 @@
 plugins {
-     id 'fabric-loom' version '1.9.2'
+     id 'fabric-loom' version '2.0.0'
      id 'maven-publish'
  }
- def minecraftVersion = "26.3"
- def yarnMappings = "26.3+build.1"
- def loaderVersion = "0.15.11"
- def fabricApiVersion = "0.110.1+26.3"
- def frameworkVersion = "26.3"
- def modVersion = "1.0.0"
- version = "${minecraftVersion}-${modVersion}"
- group = "com.mrcrayfish.goblintraders"
- def baseName = "goblintraders"
+ version = project.mod_version
+ group = project.maven_group
  repositories {
      maven { url "https://maven.fabricmc.net/" }
      maven { url "https://maven.mrcrayfish.com/" }
      mavenCentral()
  }
  dependencies {
-     minecraft "com.mojang:minecraft:${minecraftVersion}"
-     mappings "net.fabricmc:yarn:${yarnMappings}:v2"
-     modImplementation "net.fabricmc:fabric-loader:${loaderVersion}"
-     modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
-     modImplementation "com.mrcrayfish.framework:framework-fabric:${frameworkVersion}"
+     minecraft "com.mojang:minecraft:${project.minecraft_version}"
+     mappings "net.fabricmc:yarn:${project.yarn_mappings}"
+     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+     modImplementation "net.fabricmc.fabric-api:${project.fabric_api_version}"
+     modImplementation "com.mrcrayfish.framework:framework-fabric:${project.framework_version}"
  }
  loom {
      accessWidenerPath = file("src/main/resources/goblintraders.accesswidener")
  }
- java {
-     toolchain {
-         languageVersion = JavaLanguageVersion.of(25)
-     }
- }
  tasks.processResources {
      inputs.property "version", project.version
-     inputs.property "minecraft_version", minecraftVersion
-     inputs.property "fabric_api_version", fabricApiVersion
-     inputs.property "loader_version", loaderVersion
+     inputs.property "minecraft_version", project.minecraft_version
+     inputs.property "fabric_api_version", project.fabric_api_version
+     inputs.property "loader_version", loader_version
      filesMatching("fabric.mod.json") {
          expand "version": project.version,
-                 "minecraft_version": minecraftVersion,
-                 "fabric_api_version": fabricApiVersion,
-                 "loader_version": loaderVersion
+                 "minecraft_version": project.minecraft_version,
+                 "fabric_api_version": project.fabric_api_version,
+                 "loader_version": loader_version
      }
  }
  tasks.jar {
-     archiveBaseName = baseName
+     archiveBaseName = "goblintraders"
      from("LICENSE") {
-         rename { "${it}_${baseName}" }
+         rename { "${it}_${archiveBaseName.get()}" }
      }
  }
  publishing {
      publications {
          mavenJava(MavenPublication) {
-             artifactId = baseName
-             groupId = group
-             version = project.version
+             artifactId = "goblintraders"
              from components.java
          }
      }
