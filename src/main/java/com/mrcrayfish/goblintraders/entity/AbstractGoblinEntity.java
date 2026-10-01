@@ -1,0 +1,462 @@
+package com.mrcrayfish.goblintraders.entity;
+
+import com.mrcrayfish.goblintraders.Config;
+import com.mrcrayfish.goblintraders.Constants;
+import com.mrcrayfish.goblintraders.core.ModSounds;
+import com.mrcrayfish.goblintraders.entity.ai.goal.TradeWithPlayerGoal;
+import com.mrcrayfish.goblintraders.entity.ai.goal.*;
+import com.mrcrayfish.goblintraders.inventory.GoblinMerchantMenu;
+import com.mrcrayfish.goblintraders.trades.GoblinOffers;
+import com.mrcrayfish.goblintraders.util.ReflectedMethod;
+import net.minecraft.core.HolderSet;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.core.particles.ItemParticleOption;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.Mth;
+import net.minecraft.util.Unit;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.SimpleMenuProvider;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.*;
+import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.control.BodyRotationControl;
+import net.minecraft.world.entity.ai.goal.*;
+import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.npc.Npc;
+import net.minecraft.world.entity.npc.villager.AbstractVillager;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.trading.MerchantOffer;
+import net.minecraft.world.item.trading.MerchantOffers;
+import net.minecraft.world.item.trading.TradeSet;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.portal.TeleportTransition;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.world.level.storage.loot.LootContext;
+import net.minecraft.world.level.storage.loot.LootParams;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParamSets;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
+import net.minecraft.world.phys.Vec3;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+/**
+ * Author: MrCrayfish
+ */
+public abstract class AbstractGoblinEntity extends TraderCreatureEntity implements Npc
+{
+    public static final EntityDataAccessor<Boolean> STUNNED = SynchedEntityData.defineId(AbstractGoblinEntity.class, EntityDataSerializers.BOOLEAN);
+    public static final EntityDataAccessor<Float> STUN_ROTATION = SynchedEntityData.defineId(AbstractGoblinEntity.class, EntityDataSerializers.FLOAT);
+    public static final EntityDataAccessor<Boolean> SITTING = SynchedEntityData.defineId(AbstractGoblinEntity.class, EntityDataSerializers.BOOLEAN);
+    public static final EntityDataAccessor<Boolean> CURIOUS = SynchedEntityData.defineId(AbstractGoblinEntity.class, EntityDataSerializers.BOOLEAN);
+
+    public static final ReflectedMethod<AbstractVillager, Void> ADD_OFFERS_FROM_ITEM_LISTINGS_METHOD = new ReflectedMethod<>(AbstractVillager.class, "addOffersFromItemListings", LootContext.class, MerchantOffers.class, HolderSet.class, int.class);
+    public static final ReflectedMethod<AbstractVillager, Void> ADD_OFFERS_FROM_ITEM_LISTINGS_WITHOUT_DUPLICATES_METHOD = new ReflectedMethod<>(AbstractVillager.class, "addOffersFromItemListingsWithoutDuplicates", LootContext.class, MerchantOffers.class, HolderSet.class, int.class);
+
+    private @Nullable Player customer;
+    private @Nullable MerchantOffers offers;
+    private final Set<UUID> tradedCustomers = new HashSet<>();
+
+    private int stunDelay;
+    private int despawnDelay = -1;
+    private int fallCounter;
+    private int restockDelay;
+    private float headTilt;
+    private float headTiltO;
+    private float armAngle;
+    private float armAngleO;
+    private int curiousTime;
+
+    protected AbstractGoblinEntity(EntityType<? extends TraderCreatureEntity> type, Level level)
+    {
+        super(type, level);
+    }
+
+    @Override
+    protected void registerGoals()
+    {
+        this.goalSelector.addGoal(0, new FloatGoal(this));
+        this.goalSelector.addGoal(1, new FirePanicGoal(this, 1.3));
+        this.goalSelector.addGoal(2, new TradeWithPlayerGoal(this));
+        this.goalSelector.addGoal(3, new LookAtCustomerGoal(this));
+        this.goalSelector.addGoal(4, new AttackRevengeTargetGoal(this));
+        this.goalSelector.addGoal(5, new EatFavouriteFoodGoal(this));
+        this.goalSelector.addGoal(6, new FindFavouriteFoodGoal(this));
+        this.goalSelector.addGoal(7, new GoblinTemptGoal(this, 1.0, stack -> stack.is(this.getFavouriteFood().getItem()), false));
+        this.goalSelector.addGoal(8, new FollowPotentialCustomerGoal(this));
+        this.goalSelector.addGoal(9, new SitAndLookGoal(this));
+        this.goalSelector.addGoal(10, new MoveTowardsRestrictionGoal(this, 1.0));
+        this.goalSelector.addGoal(11, new WaterAvoidingRandomStrollGoal(this, 1.0));
+        this.goalSelector.addGoal(12, new InteractGoal(this, Player.class, 4.0F, 1.0F));
+        this.goalSelector.addGoal(13, new LookAtPlayerGoal(this, Mob.class, 8.0F));
+    }
+
+    @Override
+    protected void updateControlFlags()
+    {
+        super.updateControlFlags();
+        if(this.isStunned())
+        {
+            this.goalSelector.setControlFlag(Goal.Flag.MOVE, true);
+            this.goalSelector.setControlFlag(Goal.Flag.JUMP, true);
+            this.goalSelector.setControlFlag(Goal.Flag.LOOK, true);
+        }
+    }
+
+    @Override
+    protected void defineSynchedData(SynchedEntityData.Builder builder)
+    {
+        super.defineSynchedData(builder);
+        builder.define(STUNNED, false);
+        builder.define(STUN_ROTATION, 0F);
+        builder.define(SITTING, false);
+        builder.define(CURIOUS, false);
+    }
+
+    public abstract Identifier getTexture();
+
+    public int getFallCounter()
+    {
+        return this.fallCounter;
+    }
+
+    // TODO find out how to fix
+    /*@Override
+    public ItemStack eat(Level level, ItemStack stack, FoodProperties properties)
+    {
+        if(stack.getItem() == this.getFavouriteFood().getItem())
+        {
+            this.setHealth(this.getHealth() + properties.nutrition());
+        }
+        return super.eat(level, stack, properties);
+    }*/
+
+    @Override
+    public void baseTick()
+    {
+        this.headTiltO = this.headTilt;
+        this.armAngleO = this.armAngle;
+
+        if(this.despawnDelay > 0)
+        {
+            this.despawnDelay--;
+        }
+
+        super.baseTick();
+        this.updateSwingTime(); //TODO test
+        if(this.stunDelay > 0)
+        {
+            this.stunDelay--;
+            if(this.stunDelay == 0 && this.isAlive())
+            {
+                this.entityData.set(STUNNED, false);
+                this.level().playSound(null, this.getX(), this.getY(), this.getZ(), ModSounds.ENTITY_GOBLIN_TRADER_ANNOYED_GRUNT.get(), SoundSource.NEUTRAL, 1.0F, 0.9F + this.getRandom().nextFloat() * 0.2F);
+            }
+        }
+        if(this.entityData.get(STUNNED))
+        {
+            if(this.fallCounter < 10)
+            {
+                this.fallCounter++;
+            }
+        }
+        else
+        {
+            this.fallCounter = 0;
+        }
+        if(!this.level().isClientSide() && this.getMaxRestockDelay() != -1)
+        {
+            if(++this.restockDelay >= this.getMaxRestockDelay())
+            {
+                this.getOffers().forEach(MerchantOffer::resetUses);
+                this.restockDelay = 0;
+                this.resendOffers();
+            }
+        }
+
+        if(!this.level().isClientSide() && --this.curiousTime <= 0)
+        {
+            this.setCurious(false);
+        }
+
+        float targetTilt = this.isCurious() ? 20 : 0;
+        this.headTilt = Mth.lerp(0.35F, this.headTilt, targetTilt);
+
+        float targetAngle = this.getTargetArmAngle();
+        this.armAngle = Mth.lerp(0.35F, this.armAngle, targetAngle);
+    }
+
+    private void resendOffers()
+    {
+        MerchantOffers offers = this.getOffers();
+        Player player = this.getTradingPlayer();
+        if(player != null && !offers.isEmpty())
+        {
+            player.sendMerchantOffers(player.containerMenu.containerId, offers, 0, 0, false, this.canRestock());
+        }
+    }
+
+    @Override
+    public void setTradingPlayer(@Nullable Player player)
+    {
+        this.customer = player;
+    }
+
+    @Nullable
+    @Override
+    public Player getTradingPlayer()
+    {
+        return this.customer;
+    }
+
+    public boolean hasCustomer()
+    {
+        return this.customer != null;
+    }
+
+    @Override
+    public MerchantOffers getOffers()
+    {
+        if(this.level() instanceof ServerLevel level)
+        {
+            if(this.offers == null)
+            {
+                this.offers = new MerchantOffers();
+                this.populateTradeData(level);
+            }
+            return this.offers;
+        }
+        throw new IllegalStateException("Cannot load Villager offers on the client");
+    }
+
+    protected abstract void populateTradeData(ServerLevel level);
+
+    protected void addOffersFromTradeSet(ServerLevel level, MerchantOffers offers, ResourceKey<TradeSet> key)
+    {
+        this.registryAccess().lookupOrThrow(Registries.TRADE_SET).getOptional(key).ifPresentOrElse(tradeSet -> {
+            LootContext context = new LootContext.Builder(new LootParams.Builder(level).withParameter(LootContextParams.ORIGIN, this.position()).withParameter(LootContextParams.THIS_ENTITY, this).withParameter(LootContextParams.ADDITIONAL_COST_COMPONENT_ALLOWED, Unit.INSTANCE).create(LootContextParamSets.VILLAGER_TRADE)).create(tradeSet.randomSequence());
+            int numberOfOffers = tradeSet.calculateNumberOfTrades(context);
+            if(tradeSet.allowDuplicates()) {
+                ADD_OFFERS_FROM_ITEM_LISTINGS_METHOD.invoke(null, context, offers, tradeSet.getTrades(), numberOfOffers);
+            } else {
+                ADD_OFFERS_FROM_ITEM_LISTINGS_WITHOUT_DUPLICATES_METHOD.invoke(null, context, offers, tradeSet.getTrades(), numberOfOffers);
+            }
+        }, () -> {
+            Constants.LOG.debug("Trade set doesn't exist: {}", key);
+        });
+    }
+
+    @Override
+    public void openTradingScreen(Player player, Component title, int level)
+    {
+        OptionalInt id = player.openMenu(new SimpleMenuProvider((windowId, playerInventory, player1) -> {
+            return new GoblinMerchantMenu(windowId, playerInventory, this);
+        }, title));
+        if(id.isPresent())
+        {
+            MerchantOffers offers = this.getOffers();
+            if(!offers.isEmpty())
+            {
+                player.sendMerchantOffers(id.getAsInt(), offers, level, 0, false, this.canRestock());
+            }
+        }
+    }
+
+    @Override
+    public boolean canRestock()
+    {
+        return true;
+    }
+
+    @Override
+    public void overrideOffers(@Nullable MerchantOffers offers) {}
+
+    @Override
+    public void notifyTrade(MerchantOffer offer)
+    {
+        offer.increaseUses();
+        if(this.customer != null)
+        {
+            this.tradedCustomers.add(this.customer.getUUID());
+        }
+        if(this.level() instanceof ServerLevel serverLevel)
+        {
+            ExperienceOrb.award(serverLevel, this.getPosition(1F), offer.getXp());
+        }
+    }
+
+    @Override
+    public void notifyTradeUpdated(ItemStack stack)
+    {
+
+    }
+
+    @Override
+    public boolean isClientSide()
+    {
+        return this.level().isClientSide();
+    }
+
+    @Override
+    public int getVillagerXp()
+    {
+        return 0;
+    }
+
+    @Override
+    public void overrideXp(int xpIn) {}
+
+    @Override
+    public boolean showProgressBar()
+    {
+        return false;
+    }
+
+    @Override
+    public SoundEvent getNotifyTradeSound()
+    {
+        return SoundEvents.VILLAGER_YES;
+    }
+
+    @Override
+    protected InteractionResult mobInteract(Player player, InteractionHand hand)
+    {
+        ItemStack heldItem = player.getItemInHand(hand);
+        if(heldItem.getItem() == Items.NAME_TAG)
+        {
+            InteractionResult result = heldItem.interactLivingEntity(player, this, hand);
+            if(result.consumesAction())
+            {
+                // Remove the wandering restriction once named
+                this.clearHome();
+            }
+            return result;
+        }
+        else if(this.getFavouriteFood().is(heldItem.getItem()))
+        {
+            if(this.getItemBySlot(EquipmentSlot.MAINHAND).isEmpty())
+            {
+                this.setItemSlot(EquipmentSlot.MAINHAND, heldItem.copyWithCount(1));
+                heldItem.shrink(1);
+                return InteractionResult.SUCCESS;
+            }
+        }
+        else if(this.isAlive() && !this.hasCustomer() && !this.isBaby() && (this.fireImmune() || !this.isOnFire()) && !this.isStunned()) //TODO check for egg
+        {
+            if(!this.isClientSide())
+            {
+                if(this.getOffers().isEmpty())
+                {
+                    return InteractionResult.PASS;
+                }
+                if(this.getLastHurtByMob() == null || this.getLastHurtByMob() != player)
+                {
+                    this.setTradingPlayer(player);
+                    this.openTradingScreen(player, Objects.requireNonNull(this.getDisplayName()), 1);
+                }
+            }
+            return InteractionResult.SUCCESS;
+        }
+        return super.mobInteract(player, hand);
+    }
+
+    /**
+     * A custom implementation that fixes the position of the particles
+     */
+    protected void spawnFoodParticles(ItemStack stack, int count)
+    {
+        for(int i = 0; i < count; i++)
+        {
+            Vec3 frontPosition = Vec3.directionFromRotation(0F, this.yBodyRot).scale(0.25);
+            frontPosition = frontPosition.add(0, 0.35, 0);
+            frontPosition = frontPosition.add(this.position());
+            Vec3 motion = new Vec3(this.getRandom().nextDouble() * 0.2 - 0.1, 0.1, this.getRandom().nextDouble() * 0.2 - 0.1);
+            this.level().addParticle(new ItemParticleOption(ParticleTypes.ITEM, stack.getItem()), frontPosition.x, frontPosition.y, frontPosition.z, motion.x, motion.y + 0.05D, motion.z);
+        }
+    }
+
+    public boolean isPreviousCustomer(Player player)
+    {
+        return this.tradedCustomers.contains(player.getUUID());
+    }
+
+    @Override
+    public boolean hurtServer(ServerLevel level, DamageSource source, float amount)
+    {
+        boolean attacked = super.hurtServer(level, source, amount);
+        if(attacked)
+        {
+            this.stopUsingItem();
+            this.setCurious(false);
+            this.setSitting(false);
+            if(source.getEntity() instanceof Player)
+            {
+                this.getNavigation().stop();
+                this.entityData.set(STUNNED, true);
+                this.entityData.set(STUN_ROTATION, this.getStunRotation(source.getEntity()));
+                @Override
+     public void baseTick()
+     {
+         this.headTiltO = this.headTilt;
+         this.armAngleO = this.armAngle;
+         if(this.despawnDelay > 0)
+         {
+             this.despawnDelay--;
+         }
+         super.baseTick();
+         //this.updateSwingTime(); //TODO test MC26.3无此方法，注释
+         if(this.stunDelay > 0)
+         {
+             this.stunDelay--;
+             if(this.stunDelay == 0 && this.isAlive())
+             {
+                 this.entityData.set(STUNNED, false);
+                 this.level().playSound(null, this.getX(), this.getY(), this.getZ(), ModSounds.ENTITY_GOBLIN_TRADER_ANNOYED_GRUNT.get(), SoundSource.NEUTRAL, 1.0F, 0.9F + this.getRandom().nextFloat() * 0.2F);
+             }
+         }
+         if(this.entityData.get(STUNNED))
+         {
+             if(this.fallCounter < 10)
+             {
+                 this.fallCounter++;
+             }
+         }
+         else
+         {
+             this.fallCounter = 0;
+         }
+         if(!this.level().isClientSide() && this.getMaxRestockDelay() != -1)
+         {
+             if(++this.restockDelay >= this.getMaxRestockDelay())
+             {
+                 this.getOffers().forEach(MerchantOffer::resetUses);
+                 this.restockDelay = 0;
+                 this.resendOffers();
+             }
+         }
+         if(!this.level().isClientSide() && --this.curiousTime <= 0)
+         {
+             this.setCurious(false);
+         }
+         float targetTilt = this.isCurious() ? 20 : 0;
+         this.headTilt = Mth.lerp(0.35F, this.headTilt, targetTilt);
+         float targetAngle = this.getTargetArmAngle();
+         this.armAngle = Mth.lerp(0.35F, this.armAngle, targetAngle);

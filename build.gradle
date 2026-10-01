@@ -1,0 +1,64 @@
+plugins {
+     id 'fabric-loom' version '1.9.2'
+     id 'maven-publish'
+ }
+ def minecraftVersion = "26.3"
+ def yarnMappings = "26.3+build.1"
+ def loaderVersion = "0.15.11"
+ def fabricApiVersion = "0.110.1+26.3"
+ def frameworkVersion = "26.3"
+ def modVersion = "1.0.0"
+ version = "${minecraftVersion}-${modVersion}"
+ group = "com.mrcrayfish.goblintraders"
+ def baseName = "goblintraders"
+ repositories {
+     maven { url "https://maven.fabricmc.net/" }
+     maven { url "https://maven.mrcrayfish.com/" }
+     mavenCentral()
+ }
+ dependencies {
+     minecraft "com.mojang:minecraft:${minecraftVersion}"
+     mappings "net.fabricmc:yarn:${yarnMappings}:v2"
+     modImplementation "net.fabricmc:fabric-loader:${loaderVersion}"
+     modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
+     modImplementation "com.mrcrayfish.framework:framework-fabric:${frameworkVersion}"
+ }
+ loom {
+     accessWidenerPath = file("src/main/resources/goblintraders.accesswidener")
+ }
+ java {
+     toolchain {
+         languageVersion = JavaLanguageVersion.of(25)
+     }
+ }
+ tasks.processResources {
+     inputs.property "version", project.version
+     inputs.property "minecraft_version", minecraftVersion
+     inputs.property "fabric_api_version", fabricApiVersion
+     inputs.property "loader_version", loaderVersion
+     filesMatching("fabric.mod.json") {
+         expand "version": project.version,
+                 "minecraft_version": minecraftVersion,
+                 "fabric_api_version": fabricApiVersion,
+                 "loader_version": loaderVersion
+     }
+ }
+ tasks.jar {
+     archiveBaseName = baseName
+     from("LICENSE") {
+         rename { "${it}_${baseName}" }
+     }
+ }
+ publishing {
+     publications {
+         mavenJava(MavenPublication) {
+             artifactId = baseName
+             groupId = group
+             version = project.version
+             from components.java
+         }
+     }
+     repositories {
+         mavenLocal()
+     }
+ }

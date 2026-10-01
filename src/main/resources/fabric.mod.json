@@ -1,0 +1,33 @@
+{
+   "schemaVersion": 1,
+   "id": "goblintraders",
+   "version": "${mod_version}",
+   "name": "MrCrayfish's Goblin Traders",
+   "description": "Adds goblin traders to your world!",
+   "authors": [
+     "MrCrayfish"
+   ],
+   "contact": {
+     "repo": "https://github.com/MrCrayfish/GoblinTraders"
+   },
+   "license": "MIT",
+   "icon": "assets/goblintraders/icon.png",
+   "environment": "*",
+   "entrypoints": {
+     "main": [
+       "com.mrcrayfish.goblintraders.GoblinTraders"
+     ],
+     "client": [
+       "com.mrcrayfish.goblintraders.client.ClientHandler"
+     ]
+   },
+   "mixins": [
+     "goblintraders.fabric.mixins.json"
+   ],
+   "depends": {
+     "fabric-api": ">=0.161.0+26.3",
+     "framework-fabric": ">=0.13.26+26.3",
+     "minecraft": "~26.3",
+     "fabric-loader": ">=0.19.5"
+   }
+ }
